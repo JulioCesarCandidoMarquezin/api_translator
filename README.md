@@ -19,6 +19,7 @@ Para instalar as dependências, você pode usar o seguinte comando:
 
 ```bash
 pip install fastapi opencv-python moviepy pytesseract googletrans numpy
+```
 
 ## Endpoints
 GET /api/supported-languages
