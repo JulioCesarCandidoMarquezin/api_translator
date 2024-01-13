@@ -9,16 +9,21 @@ import numpy as np
 import tempfile
 from typing import List
 import os
-import traceback
+import base64
+from PIL import ImageFont, ImageDraw, Image
 
 app = FastAPI()
+
 urls = ['translate.googleapis.com', 'translate.google.com', 'translate.google.com.ar', 'translate.google.com.br',
         'translate.google.com']
+
 user = 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:83.0) Gecko/20100101 Firefox/83.0'
+
 translator = Translator(service_urls=urls, user_agent=user, raise_exception=False)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # ou use um domínio específico
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -39,8 +44,8 @@ language_mapping = {
     "ca": "cat",
     "ceb": "ceb",
     "ny": "nya",
-    "zh-CN": "chi_sim",  # Chinês simplificado
-    "zh-TW": "chi_tra",  # Chinês tradicional
+    "zh-CN": "chi_sim",
+    "zh-TW": "chi_tra",
     "co": "cos",
     "hr": "hrv",
     "cs": "ces",
@@ -133,19 +138,6 @@ language_mapping = {
 }
 
 
-def get_tesseract_language(google_translate_code):
-    return language_mapping.get(google_translate_code, google_translate_code)
-
-
-def detect_language_or_default(text: str):
-    try:
-        detected_language = detect_language(text)
-        return detected_language
-    except Exception as e:
-        print(f"Error detecting language: {e}")
-        return 'en'  # Defina a linguagem padrão desejada aqui
-
-
 def detect_language(text: str):
     return translator.detect(text).lang
 
@@ -154,20 +146,74 @@ def translate_text(text: str, src: str = 'auto', dest: str = 'en'):
     return translator.translate(text=text, src=src, dest=dest).text
 
 
+def get_tesseract_language(google_translate_code):
+    return language_mapping.get(google_translate_code)
+
+
 async def convert_bytes_in_image(image: UploadFile = File(...)):
     content = await image.read()
     nparr = np.frombuffer(content, np.uint8)
     return cv.imdecode(nparr, cv.IMREAD_COLOR)
 
-async def extract_text_from_image(lang: str = None, content: Mat = None):
-    gray_image = cv.cvtColor(content, cv.COLOR_BGR2GRAY)
-    _, binary = cv.threshold(gray_image, 50, 150, cv.THRESH_BINARY)
-    # kernel = np.ones((5, 5), np.uint8)
-    # dilatation = cv.erode(binary, kernel, iterations=1)
-    extractedText = pt.image_to_string(binary, lang=lang).strip()
-    textPositions = pt.image_to_boxes(binary, lang=lang)
+
+async def convert_image_in_bytes(image: Mat):
+    _, img_encoded = cv.imencode(".png", image)
+    img_base64 = base64.b64encode(img_encoded).decode("utf-8")
+    return img_base64
+
+
+def transform_rgb_to_binary(img: Mat):
+    gray_image = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+    gaussian_blur = cv.GaussianBlur(gray_image, (7, 7), 0)
+    _, binary = cv.threshold(gaussian_blur, 200, 255, cv.THRESH_BINARY)
+    binary = cv.bitwise_not(binary)
+    return binary
+
+
+async def extract_text_from_image(src: str, content: Mat = None):
+    binary = transform_rgb_to_binary(content)
+
+    extractedText = pt.image_to_string(binary, lang=src).strip()
+    textPositions = pt.image_to_boxes(binary, lang=src)
 
     return extractedText, textPositions
+
+
+def translate_and_replace_text_from_image(src: str, dest: str, content: Mat = None):
+    if src == 'auto':
+        src = 'en'
+
+    ocr_src = get_tesseract_language(src)
+
+    binary = transform_rgb_to_binary(content)
+    textData = pt.image_to_data(binary, lang=ocr_src)
+
+    imgReplaced = content.copy()
+
+    linhas = textData.splitlines()
+
+    for x, linha in enumerate(linhas):
+        if x != 0:
+            linha = linha.split()
+
+            if len(linha) > 11:
+                x, y, w, h = map(int, linha[6:10])
+
+                word = translate_text(str(linha[11]), src=src, dest=dest)
+
+                cv.rectangle(imgReplaced, (x, y), (w + x, h + y), (255, 255, 255), -1)
+
+                imagem_pil = Image.fromarray(imgReplaced)
+
+                draw = ImageDraw.Draw(imagem_pil)
+
+                font = ImageFont.truetype("arial.ttf", int(h * 1.2), encoding='utf-8')
+
+                draw.text((x, y), word, fill=(0, 0, 0), font=font, spacing=1, align='center')
+
+                imgReplaced = cv.cvtColor(np.array(imagem_pil), cv.COLOR_RGB2BGR)
+
+    return imgReplaced
 
 
 @app.get("/api/supported-languages")
@@ -196,7 +242,6 @@ async def api_translate_text(text: str = Body(...), src: str = Body(default='aut
         else:
             raise HTTPException(status_code=400, detail="Linguagem não suportada.")
     except Exception as e:
-        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Erro ao traduzir texto: {str(e)}")
 
 
@@ -219,33 +264,43 @@ async def api_translate_multiples(texts: List[str] = Body(...), destLanguages: L
 
 
 @app.post("/api/extract-text-from-image")
-async def api_extract_text_from_image(lang: str = Body(...), image: UploadFile = File(...)):
+async def api_extract_text_from_image(src: str = Body(...), image: UploadFile = File(...)):
     try:
         img = await convert_bytes_in_image(image=image)
 
-        if lang == 'auto':
-            lang = detect_language_or_default(image.filename)
-
-        lang = get_tesseract_language(lang)
-        extractedText, textPositions = await extract_text_from_image(lang=lang, content=img)
+        extractedText, textPositions = await extract_text_from_image(src=src, content=img)
 
         return {"extractedText": extractedText, "textPositions": textPositions}
     except Exception as e:
-        print(f"Erro ao extrair texto da imagem: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erro ao extrair texto da imagem: {str(e)}")
+
+
+@app.post("/api/translate-and-replace-text-from-image")
+async def api_translate_and_replace_text_from_image(src: str = Body(...), dest: str = Body(...),
+                                                    image: UploadFile = File(...)):
+    try:
+        img = await convert_bytes_in_image(image=image)
+
+        imgReplaced = await translate_and_replace_text_from_image(src=src, dest=dest, content=img)
+        imgConverted = convert_image_in_bytes(imgReplaced)
+
+        return {"imgReplaced": imgConverted}
+    except Exception as e:
+        print(e)
         raise HTTPException(status_code=500, detail=f"Erro ao extrair texto da imagem: {str(e)}")
 
 
 @app.post("/api/extract-texts-from-images")
-async def api_extract_texts_from_images(lang: str = Body(...), images: List[UploadFile] = File(...)):
+async def api_extract_texts_from_images(src: str = Body(...), images: List[UploadFile] = File(...)):
     try:
         extractedTexts = []
         extractedTextsPositions = []
-        lang = get_tesseract_language(lang)
+        src = get_tesseract_language(src)
 
         for image in images:
             img = await convert_bytes_in_image(image=image)
 
-            extractedText, textPositions = await extract_text_from_image(lang=lang, content=img)
+            extractedText, textPositions = await extract_text_from_image(src=src, content=img)
 
             extractedTexts.append(extractedText)
             extractedTextsPositions.append(textPositions)
@@ -255,28 +310,25 @@ async def api_extract_texts_from_images(lang: str = Body(...), images: List[Uplo
 
 
 @app.post("/api/extract-text-from-video")
-async def api_extract_text_from_video(lang: str = Body(None), video: UploadFile = File(...)):
+async def api_extract_text_from_video(src: str = Body(None), video: UploadFile = File(...)):
     try:
-        # Salvar o vídeo temporariamente
         video_path = "temp_video.mp4"
         with tempfile.NamedTemporaryFile(delete=False, dir=tempfile.gettempdir()) as video_file:
             video_file.write(video.file.read())
 
-        # Extrair legendas do vídeo usando a biblioteca moviepy
         clip = VideoFileClip(video_path)
         frames = [frame for frame in clip.iter_frames()]
 
         extractedTexts = []
         extractedTextsPositions = []
         for frame in frames:
-            extractedText, textPositions = await extract_text_from_image(lang=lang, content=frame)
+            extractedText, textPositions = await extract_text_from_image(src=src, content=frame)
 
             extractedTexts.append(extractedText)
             extractedTextsPositions.append(textPositions)
 
-        # Remover o vídeo temporário após a extração
         os.remove(video_path)
 
         return {"extractedTexts": extractedTexts, "extractedTextsPositions": extractedTextsPositions}
     except Exception as e:
-        return {"error": f"Erro ao extrair texto do vídeo {e}"}
+        return {"error": f"Erro ao extrair texto do vídeo {str(e)}"}
