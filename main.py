@@ -1,16 +1,21 @@
 from cv2 import Mat
 from fastapi import FastAPI, UploadFile, File, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from moviepy.editor import VideoFileClip
 import cv2 as cv
-from pytesseract import pytesseract as pt
+from pytesseract import pytesseract as pt, Output
 from googletrans import Translator, LANGUAGES
 import numpy as np
 import tempfile
 from typing import List
-import os
-import base64
+from typing import Union
+import requests
 from PIL import ImageFont, ImageDraw, Image
+from unidecode import unidecode
+from textwrap import wrap
+from io import BytesIO
+import os
 
 app = FastAPI()
 
@@ -29,113 +34,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-language_mapping = {
-    "af": "afr",
-    "sq": "sqi",
-    "am": "amh",
-    "ar": "ara",
-    "hy": "hye",
-    "az": "aze",
-    "eu": "eus",
-    "be": "bel",
-    "bn": "ben",
-    "bs": "bos",
-    "bg": "bul",
-    "ca": "cat",
-    "ceb": "ceb",
-    "ny": "nya",
-    "zh-CN": "chi_sim",
-    "zh-TW": "chi_tra",
-    "co": "cos",
-    "hr": "hrv",
-    "cs": "ces",
-    "da": "dan",
-    "nl": "nld",
-    "en": "eng",
-    "eo": "epo",
-    "et": "est",
-    "tl": "fil",
-    "fi": "fin",
-    "fr": "fra",
-    "fy": "fry",
-    "gl": "glg",
-    "ka": "kat",
-    "de": "deu",
-    "el": "ell",
-    "gu": "guj",
-    "ht": "hat",
-    "ha": "hau",
-    "haw": "haw",
-    "iw": "heb",
-    "hi": "hin",
-    "hmn": "hmn",
-    "hu": "hun",
-    "is": "isl",
-    "ig": "ibo",
-    "id": "ind",
-    "ga": "gle",
-    "it": "ita",
-    "ja": "jpn",
-    "jw": "jav",
-    "kn": "kan",
-    "kk": "kaz",
-    "km": "khm",
-    "rw": "kin",
-    "ko": "kor",
-    "ku": "kur",
-    "ky": "kir",
-    "lo": "lao",
-    "la": "lat",
-    "lv": "lav",
-    "lt": "lit",
-    "lb": "ltz",
-    "mk": "mkd",
-    "mg": "mlg",
-    "ms": "msa",
-    "ml": "mal",
-    "mt": "mlt",
-    "mi": "mri",
-    "mr": "mar",
-    "mn": "mon",
-    "my": "mya",
-    "ne": "nep",
-    "no": "nor",
-    "ps": "pus",
-    "fa": "fas",
-    "pl": "pol",
-    "pt": "por",
-    "pa": "pan",
-    "ro": "ron",
-    "ru": "rus",
-    "sm": "smo",
-    "gd": "gla",
-    "sr": "srp",
-    "st": "sot",
-    "sn": "sna",
-    "sd": "snd",
-    "si": "sin",
-    "sk": "slk",
-    "sl": "slv",
-    "so": "som",
-    "es": "spa",
-    "su": "sun",
-    "sw": "swa",
-    "sv": "swe",
-    "tg": "tgk",
-    "ta": "tam",
-    "te": "tel",
-    "th": "tha",
-    "tr": "tur",
-    "uk": "ukr",
-    "ur": "urd",
-    "uz": "uzb",
-    "vi": "vie",
-    "cy": "cym",
-    "xh": "xho",
-    "yi": "yid",
-    "yo": "yor",
-    "zu": "zul",
-}
+language_mapping = {}
+
+
+def read_language_mapping(filename="language_mapping.txt"):
+    with open(filename, "r") as file:
+        for line in file:
+            key, value = line.strip().split(":")
+            language_mapping[key] = value
+
+
+read_language_mapping()
 
 
 def detect_language(text: str):
@@ -150,33 +59,101 @@ def get_tesseract_language(google_translate_code):
     return language_mapping.get(google_translate_code)
 
 
-async def convert_bytes_in_image(image: UploadFile = File(...)):
+async def convert_bytes_in_image(image: UploadFile):
     content = await image.read()
-    nparr = np.frombuffer(content, np.uint8)
-    return cv.imdecode(nparr, cv.IMREAD_COLOR)
+    np_arr = np.frombuffer(content, np.uint8)
+    return cv.imdecode(np_arr, cv.IMREAD_COLOR)
 
 
-async def convert_image_in_bytes(image: Mat):
-    _, img_encoded = cv.imencode(".png", image)
-    img_base64 = base64.b64encode(img_encoded).decode("utf-8")
-    return img_base64
+async def convert_image_in_bytes(img: Image) -> bytes:
+    img_byte_array = BytesIO()
+    img.save(img_byte_array)
+    return img_byte_array.getvalue()
 
 
 def transform_rgb_to_binary(img: Mat):
     gray_image = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-    gaussian_blur = cv.GaussianBlur(gray_image, (7, 7), 0)
-    _, binary = cv.threshold(gaussian_blur, 200, 255, cv.THRESH_BINARY)
+    _, binary = cv.threshold(gray_image, 200, 255, cv.THRESH_BINARY)
     binary = cv.bitwise_not(binary)
     return binary
 
 
 async def extract_text_from_image(src: str, content: Mat = None):
     binary = transform_rgb_to_binary(content)
+    text_data = pt.image_to_data(binary, lang=src)
+    return text_data
 
-    extractedText = pt.image_to_string(binary, lang=src).strip()
-    textPositions = pt.image_to_boxes(binary, lang=src)
 
-    return extractedText, textPositions
+def get_lines(paragraph):
+    lines = []
+    current_line = {'x': None, 'y': None, 'w': None, 'h': None, 'text': '', 'length': 0}
+
+    for word in paragraph:
+        x, y, w, h, text = word
+
+        if current_line['x'] is None:
+            current_line['x'] = x
+            current_line['y'] = y
+            current_line['w'] = w
+            current_line['h'] = h
+
+        current_line['text'] = (current_line['text'] + ' ' + text.strip()).strip()
+        current_line['length'] = len(current_line['text'])
+
+        current_line['w'] = word[0] + word[2]
+
+        if text.endswith('\n'):
+            current_line['h'] = int(sum(item[3] for item in paragraph) / len(paragraph))
+
+            lines.append(current_line)
+            current_line = {'x': None, 'y': None, 'w': None, 'h': None, 'text': '', 'length': 0}
+
+    if current_line['text']:
+        current_line['h'] = int(sum(item[3] for item in paragraph) / len(paragraph))
+        lines.append(current_line)
+
+    return lines
+
+
+def get_paragraphs(text_data):
+    paragraphs = []
+    current_paragraph = []
+    num_items = len(text_data['text'])
+    last_block_num = 0
+    last_line_num = 0
+
+    print(text_data)
+
+    for i in range(num_items):
+        if int(text_data['conf'][i]) > 50:
+            x, y, w, h, block_num, line_num = text_data['left'][i], text_data['top'][i], text_data['width'][i], text_data['height'][i], text_data['block_num'][i], text_data['line_num'][i]
+
+            if block_num != 0 and last_line_num != 0:
+                if line_num != last_line_num:
+                    current_paragraph[-1][4] = current_paragraph[-1][4] + '\n'
+
+                if last_block_num != block_num:
+                    paragraphs.append(current_paragraph)
+                    current_paragraph = []
+
+            current_paragraph.append([x, y, w, h, text_data['text'][i].strip()])
+            last_block_num = block_num
+            last_line_num = line_num
+
+    if current_paragraph:
+        paragraphs.append(current_paragraph)
+
+    for i in range(len(paragraphs)):
+        lines = get_lines(paragraphs[i])
+        x = min(line['x'] for line in lines)
+        y = min(line['y'] for line in lines)
+        w = max(line['x'] + line['w'] for line in lines) - x
+        h = max(line['y'] + line['h'] for line in lines) - y
+        text = ' '.join(line['text'] for line in lines)
+        length = max(line['length'] for line in lines) + 2
+        paragraphs[i] = {'x': x, 'y': y, 'w': w, 'h': h, 'text': text, 'lines': lines, 'length': length}
+
+    return paragraphs
 
 
 def translate_and_replace_text_from_image(src: str, dest: str, content: Mat = None):
@@ -186,32 +163,44 @@ def translate_and_replace_text_from_image(src: str, dest: str, content: Mat = No
     ocr_src = get_tesseract_language(src)
 
     binary = transform_rgb_to_binary(content)
-    textData = pt.image_to_data(binary, lang=ocr_src)
 
-    imgReplaced = content.copy()
+    text_data = pt.image_to_data(binary, lang=ocr_src, output_type=Output.DICT)
 
-    linhas = textData.splitlines()
+    img_replaced = content.copy()
 
-    for x, linha in enumerate(linhas):
-        if x != 0:
-            linha = linha.split()
+    img_pil = Image.fromarray(img_replaced)
+    draw = ImageDraw.Draw(img_pil)
 
-            if len(linha) > 11:
-                x, y, w, h = map(int, linha[6:10])
+    paragraphs = get_paragraphs(text_data)
 
-                word = translate_text(str(linha[11]), src=src, dest=dest)
+    for paragraph in paragraphs:
+        x, y, w, h, text, lines, length = paragraph['x'], paragraph['y'], paragraph['w'], paragraph['h'], paragraph['text'], paragraph['lines'], paragraph['length']
 
-                cv.rectangle(imgReplaced, (x, y), (w + x, h + y), (255, 255, 255), -1)
+        translated_text = translate_text(text, src=src, dest=dest)
 
-                imagem_pil = Image.fromarray(imgReplaced)
+        translated_lines = wrap(text=translated_text, width=length)
 
-                draw = ImageDraw.Draw(imagem_pil)
+        for i, line in enumerate(lines):
+            line_x, line_y, line_w, line_h, original_line_text = line['x'], line['y'], line['w'], line['h'], line['text']
 
-                font = ImageFont.truetype("arial.ttf", int(h * 1.2), encoding='utf-8')
+            translated_line = translated_lines[i]
 
-                draw.text((x, y), word, fill=(0, 0, 0), font=font, spacing=1, align='center')
+            contains_special_character = unidecode(original_line_text) != original_line_text or unidecode(translated_line) != translated_line
 
-                imgReplaced = cv.cvtColor(np.array(imagem_pil), cv.COLOR_RGB2BGR)
+            if contains_special_character:
+                aditional_size = int(line_h / 3)
+            else:
+                aditional_size = 0
+
+            draw.rectangle((line_x, line_y - aditional_size, line_w, line_h + line_y), fill='white')
+
+            font_size = int(line_h * 1.2)
+            font = ImageFont.truetype("arial.ttf", font_size, encoding='utf-8')
+
+            if i < len(translated_lines):
+                draw.text((line_x, line_y), translated_line, fill=(0, 0, 0), font=font)
+
+    imgReplaced = cv.cvtColor(np.array(img_pil), cv.COLOR_RGB2BGR)
 
     return imgReplaced
 
@@ -268,45 +257,36 @@ async def api_extract_text_from_image(src: str = Body(...), image: UploadFile = 
     try:
         img = await convert_bytes_in_image(image=image)
 
-        extractedText, textPositions = await extract_text_from_image(src=src, content=img)
+        text_data = await extract_text_from_image(src=src, content=img)
 
-        return {"extractedText": extractedText, "textPositions": textPositions}
+        return {"text_data": text_data}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao extrair texto da imagem: {str(e)}")
 
 
 @app.post("/api/translate-and-replace-text-from-image")
-async def api_translate_and_replace_text_from_image(src: str = Body(...), dest: str = Body(...),
-                                                    image: UploadFile = File(...)):
+async def api_translate_and_replace_text_from_image(
+    src: str = Body(...),
+    dest: str = Body(...),
+    image: Union[UploadFile, str] = File(...)
+):
     try:
-        img = await convert_bytes_in_image(image=image)
-
-        imgReplaced = await translate_and_replace_text_from_image(src=src, dest=dest, content=img)
-        imgConverted = convert_image_in_bytes(imgReplaced)
-
-        return {"imgReplaced": imgConverted}
-    except Exception as e:
-        print(e)
-        raise HTTPException(status_code=500, detail=f"Erro ao extrair texto da imagem: {str(e)}")
-
-
-@app.post("/api/extract-texts-from-images")
-async def api_extract_texts_from_images(src: str = Body(...), images: List[UploadFile] = File(...)):
-    try:
-        extractedTexts = []
-        extractedTextsPositions = []
-        src = get_tesseract_language(src)
-
-        for image in images:
+        if isinstance(image, str):
+            print('é')
+            response = requests.get(image)
+            response.raise_for_status()
+            img = Image.open(BytesIO(response.content))
+        else:
             img = await convert_bytes_in_image(image=image)
 
-            extractedText, textPositions = await extract_text_from_image(src=src, content=img)
+        imgReplaced = translate_and_replace_text_from_image(src=src, dest=dest, content=img)
+        imgConverted = await convert_image_in_bytes(imgReplaced)
 
-            extractedTexts.append(extractedText)
-            extractedTextsPositions.append(textPositions)
-        return {"extractedTexts": extractedTexts, "extractedTextsPositions": extractedTextsPositions}
+        return StreamingResponse(BytesIO(imgConverted), media_type="image/jpeg")
+    except requests.RequestException as e:
+        raise HTTPException(status_code=400, detail=f"Erro ao fazer a requisição HTTP: {str(e)}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao extrair texto das imagens: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erro ao carregar imagem: {str(e)}")
 
 
 @app.post("/api/extract-text-from-video")
