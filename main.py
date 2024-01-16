@@ -16,6 +16,7 @@ from unidecode import unidecode
 from textwrap import wrap
 from io import BytesIO
 import os
+from pathlib import Path
 
 app = FastAPI()
 
@@ -65,10 +66,21 @@ async def convert_bytes_in_image(image: UploadFile):
     return cv.imdecode(np_arr, cv.IMREAD_COLOR)
 
 
-async def convert_image_in_bytes(img: Image) -> bytes:
-    img_byte_array = BytesIO()
-    img.save(img_byte_array)
-    return img_byte_array.getvalue()
+async def convert_image_in_bytes(img: Mat, etx: str) -> bytes:
+    _, img_encoded = cv.imencode(ext=etx, img=img)
+    return img_encoded.tobytes()
+
+
+async def get_image_data_from_bytes(image: UploadFile):
+    if isinstance(image, str):
+        response = requests.get(image)
+        response.raise_for_status()
+        image = response.content
+
+    img = await convert_bytes_in_image(image=image)
+    etx = Path(image.filename).suffix.lower()
+
+    return img, etx
 
 
 def transform_rgb_to_binary(img: Mat):
@@ -121,8 +133,6 @@ def get_paragraphs(text_data):
     num_items = len(text_data['text'])
     last_block_num = 0
     last_line_num = 0
-
-    print(text_data)
 
     for i in range(num_items):
         if int(text_data['conf'][i]) > 50:
@@ -271,16 +281,10 @@ async def api_translate_and_replace_text_from_image(
     image: Union[UploadFile, str] = File(...)
 ):
     try:
-        if isinstance(image, str):
-            print('é')
-            response = requests.get(image)
-            response.raise_for_status()
-            img = Image.open(BytesIO(response.content))
-        else:
-            img = await convert_bytes_in_image(image=image)
+        img, etx = await get_image_data_from_bytes(image=image)
 
         imgReplaced = translate_and_replace_text_from_image(src=src, dest=dest, content=img)
-        imgConverted = await convert_image_in_bytes(imgReplaced)
+        imgConverted = await convert_image_in_bytes(etx=etx, img=imgReplaced)
 
         return StreamingResponse(BytesIO(imgConverted), media_type="image/jpeg")
     except requests.RequestException as e:
