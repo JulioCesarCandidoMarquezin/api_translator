@@ -83,11 +83,11 @@ async def get_image_data_from_bytes(image: UploadFile):
     return img, etx
 
 
-def transform_rgb_to_binary(img: Mat):
-    gray_image = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-    _, binary = cv.threshold(gray_image, 200, 255, cv.THRESH_BINARY)
-    binary = cv.bitwise_not(binary)
-    return binary
+async def transform_rgb_to_binary(img):
+    image_gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+    image_binary = cv.adaptiveThreshold(image_gray, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 11, 4)
+    image_closing = cv.morphologyEx(image_binary, cv.MORPH_CLOSE, (7, 7), iterations=1)
+    return image_closing
 
 
 async def extract_text_from_image(src: str, content: Mat = None):
@@ -115,16 +115,24 @@ def get_lines(paragraph):
         current_line['w'] = word[0] + word[2]
 
         if text.endswith('\n'):
-            current_line['h'] = int(sum(item[3] for item in paragraph) / len(paragraph))
+            current_line['h'] = int(np.sum(np.array([item[3] for item in paragraph])) / len(paragraph))
 
             lines.append(current_line)
             current_line = {'x': None, 'y': None, 'w': None, 'h': None, 'text': '', 'length': 0}
 
     if current_line['text']:
-        current_line['h'] = int(sum(item[3] for item in paragraph) / len(paragraph))
+        current_line['h'] = int(np.sum(np.array([item[3] for item in paragraph])) / len(paragraph))
         lines.append(current_line)
 
     return lines
+
+
+def is_compatible_with_paragraphs(x, y, w, h, paragraphs):
+    for paragraph in paragraphs:
+        para_x, para_y, para_w, para_h, _ = paragraph[0]
+        if para_x + para_w + w > x and para_y + para_h + h > y:
+            return paragraph
+    return False
 
 
 def get_paragraphs(text_data):
@@ -132,47 +140,86 @@ def get_paragraphs(text_data):
     current_paragraph = []
     num_items = len(text_data['text'])
     last_block_num = 0
-    last_line_num = 0
+    current_line = {'x': 0, 'y': 0, 'w': 0, 'h': 0, 'num': 0}
+    block_nums = set()
 
     for i in range(num_items):
-        if int(text_data['conf'][i]) > 50:
-            x, y, w, h, block_num, line_num = text_data['left'][i], text_data['top'][i], text_data['width'][i], text_data['height'][i], text_data['block_num'][i], text_data['line_num'][i]
+        x, y, w, h, block_num, line_num, text = text_data['left'][i], text_data['top'][i], text_data['width'][i], \
+        text_data['height'][i], text_data['block_num'][i], text_data['line_num'][i], text_data['text'][i]
 
-            if block_num != 0 and last_line_num != 0:
-                if line_num != last_line_num:
-                    current_paragraph[-1][4] = current_paragraph[-1][4] + '\n'
-
+        if int(text_data['conf'][i]) > 36 and text.strip() != '':
+            if block_num != 0 and current_line['num'] != 0:
                 if last_block_num != block_num:
-                    paragraphs.append(current_paragraph)
-                    current_paragraph = []
+                    if is_compatible_with_paragraphs(x, y, w, h, paragraphs):
+                        current_paragraph = next((paragraph for paragraph in paragraphs if paragraph[0][4] == block_num), [])
+
+                    else:
+                        paragraphs.append(current_paragraph)
+                        current_paragraph = []
+                        block_nums.add(block_num)
+
+                if line_num != current_line['num'] or (((y - current_line['y'] > current_line['h']) or (
+                        x - current_line['x'] > current_line['w'] * 2))):
+                    if current_paragraph:
+                        current_paragraph[-1][4] = current_paragraph[-1][4] + '\n'
+                    current_line = {'x': 0, 'y': 0, 'w': 0, 'h': 0, 'num': 0}
 
             current_paragraph.append([x, y, w, h, text_data['text'][i].strip()])
             last_block_num = block_num
-            last_line_num = line_num
+            current_line['num'] = line_num
+            current_line['x'] = x
+            current_line['y'] = y
+            current_line['w'] = w
+            current_line['h'] = h
 
     if current_paragraph:
         paragraphs.append(current_paragraph)
 
     for i in range(len(paragraphs)):
         lines = get_lines(paragraphs[i])
-        x = min(line['x'] for line in lines)
-        y = min(line['y'] for line in lines)
-        w = max(line['x'] + line['w'] for line in lines) - x
-        h = max(line['y'] + line['h'] for line in lines) - y
-        text = ' '.join(line['text'] for line in lines)
-        length = max(line['length'] for line in lines) + 2
-        paragraphs[i] = {'x': x, 'y': y, 'w': w, 'h': h, 'text': text, 'lines': lines, 'length': length}
+        if lines:
+            x = min(line['x'] for line in lines)
+            y = min(line['y'] for line in lines)
+            w = max(line['x'] + line['w'] for line in lines) - x
+            h = max(line['y'] + line['h'] for line in lines) - y
+            text = ' '.join(line['text'] for line in lines)
+            length = max(line['length'] for line in lines) + 2
+            paragraphs[i] = {'x': x, 'y': y, 'w': w, 'h': h, 'text': text, 'lines': lines, 'length': length}
 
     return paragraphs
 
 
-def translate_and_replace_text_from_image(src: str, dest: str, content: Mat = None):
+def draw_rectangles(draw, lines):
+    for line in lines:
+        line_x, line_y, line_w, line_h, original_line_text = line['x'], line['y'], line['w'], line['h'], line['text']
+
+        contains_special_character = unidecode(original_line_text) != original_line_text
+
+        if contains_special_character:
+            additional_size = int(line_h / 3)
+        else:
+            additional_size = 0
+
+        draw.rectangle((line_x, line_y - additional_size, line_w, line_h + line_y + additional_size), fill='white')
+
+
+def translate_and_draw(draw, lines, translated_lines):
+    for i, line in enumerate(lines):
+        x, y, h = line['x'], line['y'], line['h']
+
+        if i < len(translated_lines):
+            font = ImageFont.truetype("impact.ttf", int(h * 1.25), encoding='unic')
+            translated_line = translated_lines[i]
+            draw.text((x, y), translated_line, fill=(0, 0, 0), font=font)
+
+
+async def translate_and_replace_text_from_image(src: str, dest: str, content: Mat = None):
     if src == 'auto':
         src = 'en'
 
     ocr_src = get_tesseract_language(src)
 
-    binary = transform_rgb_to_binary(content)
+    binary = await transform_rgb_to_binary(content)
 
     text_data = pt.image_to_data(binary, lang=ocr_src, output_type=Output.DICT)
 
@@ -183,32 +230,22 @@ def translate_and_replace_text_from_image(src: str, dest: str, content: Mat = No
 
     paragraphs = get_paragraphs(text_data)
 
-    for paragraph in paragraphs:
-        x, y, w, h, text, lines, length = paragraph['x'], paragraph['y'], paragraph['w'], paragraph['h'], paragraph['text'], paragraph['lines'], paragraph['length']
+    for i, paragraph in enumerate(paragraphs):
+        if isinstance(paragraph, list):
+            continue
+
+        x, y, w, h, text = paragraph['x'], paragraph['y'], paragraph['w'], paragraph['h'], paragraph['text']
+
+        if text.strip() == '':
+            continue
+
+        lines, length = paragraph['lines'], paragraph['length']
 
         translated_text = translate_text(text, src=src, dest=dest)
-
         translated_lines = wrap(text=translated_text, width=length)
 
-        for i, line in enumerate(lines):
-            line_x, line_y, line_w, line_h, original_line_text = line['x'], line['y'], line['w'], line['h'], line['text']
-
-            translated_line = translated_lines[i]
-
-            contains_special_character = unidecode(original_line_text) != original_line_text or unidecode(translated_line) != translated_line
-
-            if contains_special_character:
-                aditional_size = int(line_h / 3)
-            else:
-                aditional_size = 0
-
-            draw.rectangle((line_x, line_y - aditional_size, line_w, line_h + line_y), fill='white')
-
-            font_size = int(line_h * 1.2)
-            font = ImageFont.truetype("arial.ttf", font_size, encoding='utf-8')
-
-            if i < len(translated_lines):
-                draw.text((line_x, line_y), translated_line, fill=(0, 0, 0), font=font)
+        draw_rectangles(draw, lines)
+        translate_and_draw(draw, lines, translated_lines)
 
     imgReplaced = cv.cvtColor(np.array(img_pil), cv.COLOR_RGB2BGR)
 
@@ -283,7 +320,7 @@ async def api_translate_and_replace_text_from_image(
     try:
         img, etx = await get_image_data_from_bytes(image=image)
 
-        imgReplaced = translate_and_replace_text_from_image(src=src, dest=dest, content=img)
+        imgReplaced = await translate_and_replace_text_from_image(src=src, dest=dest, content=img)
         imgConverted = await convert_image_in_bytes(etx=etx, img=imgReplaced)
 
         return StreamingResponse(BytesIO(imgConverted), media_type="image/jpeg")
