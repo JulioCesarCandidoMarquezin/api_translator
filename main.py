@@ -6,6 +6,7 @@ import asyncio
 import pytesseract
 from unidecode import unidecode
 
+import imageio
 import cv2 as cv
 from PIL import ImageFont, ImageDraw, Image
 from moviepy.editor import VideoFileClip
@@ -201,7 +202,7 @@ async def translate_and_draw(draw, lines, translated_lines):
                 raise e
 
 
-async def translate_and_replace_text_from_image(src: str, dest: str, content: np.ndarray = None):
+async def translate_and_replace_text_from_image(src: str, dest: str, content: np.ndarray = None) -> np.ndarray:
     if src == 'auto':
         src = 'en'
 
@@ -360,19 +361,24 @@ async def api_translate_and_replace_text_from_image(
         raise HTTPException(status_code=500, detail=f"Erro ao carregar imagem: {str(e)}")
 
 
-@app.post("/api/extract-text-from-video")
-async def api_extract_text_from_video(src: str = Body(None), video: Union[UploadFile, str] = File(...)):
+@app.post("/api/extract-text-from-media")
+async def api_extract_text_from_media(src: str = Body(None), media: Union[UploadFile, str] = File(...)):
     import uuid
     import os
-
+    
     try:
-        video_data, video_ext = await get_media_data_from_bytes(video)
+        if not media:
+            raise HTTPException(status_code=400, detail="Nenhuma imagem fornecida.")
+        if src not in LANGUAGES:
+            raise HTTPException(status_code=400, detail=f"Linguagem de origem não suportada: {src}")
+        
+        media_data, media_ext = await get_media_data_from_bytes(media)
 
-        video_path = f"temp_video_{uuid.uuid4()}.{video_ext}"
-        with open(video_path, 'wb') as video_file:
-            video_file.write(video_data)
+        media_path = f"temp_media_{uuid.uuid4()}.{media_ext}"
+        with open(media_path, 'wb') as media_file:
+            media_file.write(media_data)
 
-        clip = VideoFileClip(video_path)
+        clip = VideoFileClip(media_path)
         frames = (frame for frame in clip.iter_frames())
 
         paragraphs = []
@@ -380,7 +386,7 @@ async def api_extract_text_from_video(src: str = Body(None), video: Union[Upload
             textdata = extract_text_from_image(src, frame)
             paragraphs.append(Paragraph.get_paragraphs_from_textdata(await textdata))
 
-        os.remove(video_path)
+        os.remove(media_path)
 
         return {"paragraphs": paragraphs}
     except FileNotFoundError:
@@ -389,3 +395,54 @@ async def api_extract_text_from_video(src: str = Body(None), video: Union[Upload
         return JSONResponse(content={"error": f"Erro ao processar vídeo: {str(e)}"}, status_code=500)
     except Exception as e:
         return JSONResponse(content={"error": f"Erro inesperado: {str(e)}"}, status_code=500)
+
+
+@app.post("/api/translate-and-replace-from-media")
+async def translate_and_replace_from_media(
+    src: str = Body(None), dest: str = Body(None), media: Union[UploadFile, str] = File(...)
+):
+    import uuid
+    import os
+
+    try:
+        if not media:
+            raise HTTPException(status_code=400, detail="Nenhuma mídia fornecida.")
+        if src not in LANGUAGES:
+            raise HTTPException(status_code=400, detail=f"Linguagem de origem não suportada: {src}")
+        if dest not in LANGUAGES:
+            raise HTTPException(status_code=400, detail=f"Linguagem de destino não suportada: {dest}")
+
+        media_data, media_ext = await get_media_data_from_bytes(media)
+
+        media_path = f"temp_media_{uuid.uuid4()}.{media_ext}"
+        with open(media_path, 'wb') as media_file:
+            media_file.write(media_data)
+
+        clip = VideoFileClip(media_path)
+
+        async def process_frame(frame):
+            images = apply_image_processing(frame).values()
+            better, _ = await avaliable_better_image_for_reader(images, await get_tesseract_language(src))
+            replaced_frame = await translate_and_replace_text_from_image(src=src, dest=dest, content=better)
+            return replaced_frame
+
+        replaced_frames: List[np.ndarray] = await asyncio.gather(*(process_frame(frame) for frame in clip.iter_frames()))
+
+        output_video_path = f"output_video_{uuid.uuid4()}.mp4"
+        imageio.mimsave(output_video_path, replaced_frames, fps=clip.fps)
+
+        os.remove(media_path)
+
+        return StreamingResponse(open(output_video_path, 'rb'), media_type="video/mp4")
+    except FileNotFoundError:
+        raise HTTPException(status_code=400, detail="Arquivo de mídia não encontrado.")
+    except cv.error as e:
+        return JSONResponse(content={"error": f"Erro ao processar mídia: {str(e)}"}, status_code=500)
+    except Exception as e:
+        return JSONResponse(content={"error": f"Erro inesperado: {str(e)}"}, status_code=500)
+
+
+if __name__ == '__main__':
+    import uvicorn
+
+    uvicorn.run(app)

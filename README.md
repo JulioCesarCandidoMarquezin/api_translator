@@ -12,14 +12,14 @@ As seguintes bibliotecas são necessárias para executar a API:
 - [pytesseract](https://pypi.org/project/pytesseract/): Interface Python para o Tesseract OCR.
 - [googletrans](https://pypi.org/project/googletrans/): Interface Python para o Google Translate.
 - [numpy](https://numpy.org/): Biblioteca para manipulação de arrays em Python.
-
+- [imageio](https://imageio.readthedocs.io/): Biblioteca para leitura e escrita de imagens e vídeos em vários formatos.
 
 ## Instalação
 
 Para instalar as dependências, você pode usar o seguinte comando:
 
 ```bash
-pip install fastapi opencv-python moviepy pytesseract googletrans numpy
+pip install fastapi opencv-python moviepy pytesseract googletrans numpy imageio
 ```
 
 ## Endpoints
@@ -27,11 +27,13 @@ pip install fastapi opencv-python moviepy pytesseract googletrans numpy
 ### GET /api/supported-languages
 
 **Descrição:**
+
 Obtém a lista de idiomas suportados pelo Google Translate.
 
 ### POST /api/detect-language
 
 **Descrição:**
+
 Detecta o idioma de um texto fornecido.
 
 **Parâmetros:**
@@ -40,9 +42,11 @@ Detecta o idioma de um texto fornecido.
 ### POST /api/translate-text
 
 **Descrição:**
+
 Traduz um texto de um idioma de origem para um idioma de destino.
 
 **Parâmetros:**
+
 - `text` (obrigatório): O texto que você deseja traduzir.
 - `src` (opcional, padrão: 'auto'): O idioma de origem do texto. Se não fornecido, será detectado automaticamente.
 - `dest` (opcional, padrão: 'en'): O idioma de destino para a tradução.
@@ -50,9 +54,11 @@ Traduz um texto de um idioma de origem para um idioma de destino.
 ### POST /api/translate-multiple
 
 **Descrição:**
+
 Traduz uma lista de textos para um idioma de destino.
 
 **Parâmetros:**
+
 - `texts` (obrigatório): Uma lista de textos que você deseja traduzir.
 - `src` (opcional, padrão: 'auto'): O idioma de origem dos textos. Se não fornecido, será detectado automaticamente.
 - `dest` (opcional, padrão: 'en'): O idioma de destino para a tradução.
@@ -60,9 +66,11 @@ Traduz uma lista de textos para um idioma de destino.
 ### POST /api/extract-text-from-image
 
 **Descrição:**
+
 Extrai texto de uma imagem.
 
 **Parâmetros:**
+
 - `src` (obrigatório): O idioma esperado do texto na imagem.
 - `image` (obrigatório): A imagem da qual você deseja extrair o texto. Pode ser fornecida como um arquivo de upload ou um link para a imagem.
 
@@ -74,9 +82,11 @@ Extrai texto de uma imagem.
 ### POST /api/extract-texts-from-images
 
 **Descrição:**
+
 Extrai texto de uma lista de imagens.
 
 **Parâmetros:**
+
 - `src` (obrigatório): O idioma esperado do texto nas imagens.
 - `images` (obrigatório): Uma lista de imagens das quais você deseja extrair o texto. Cada imagem pode ser fornecida como um arquivo de upload ou um link para a imagem.
 
@@ -87,6 +97,7 @@ Extrai texto de uma lista de imagens.
 ### POST /api/translate-image-and-replace
 
 **Descrição:**
+
 Traduz um texto em uma imagem e substitui o texto original pela tradução.
 
 **Parâmetros:**
@@ -100,15 +111,41 @@ Traduz um texto em uma imagem e substitui o texto original pela tradução.
 - Imagem com o texto traduzido substituindo o texto original.
 
 
-### POST /api/extract-text-from-video
+### POST /api/extract-text-from-media
 
 **Descrição:**
+
 Extrai texto de um vídeo.
 
 **Parâmetros:**
 - `src` (obrigatório): O idioma esperado do texto no vídeo.
-- `video` (obrigatório): O vídeo do qual você deseja extrair o texto. Deve ser fornecido como um arquivo de upload ou um link para o vídeo.
+- `media` (obrigatório): O vídeo do qual você deseja extrair o texto. Deve ser fornecido como um arquivo de upload ou um link para o vídeo.
 
 **Retorno:**
 
 - Lista de dados estruturados do texto extraído, incluindo coordenadas e texto para cada frame do vídeo.
+
+### POST /api/translate-and-replace-from-media
+
+**Descrição:**
+
+Traduz e substitui o texto de um vídeo.
+
+**Parâmetros:**
+
+- `src` (obrigatório): O idioma esperado do texto no vídeo.
+- `dest` (obrigatório): O idioma de destino para a tradução do texto.
+- `media` (obrigatório): O vídeo do qual você deseja extrair e substituir o texto. Pode ser fornecido como um arquivo de upload ou um link para o vídeo.
+
+**Retorno:**
+
+- Retorna o vídeo com o texto traduzido e substituído.
+
+**Possíveis Erros:**
+
+- 400 Bad Request: Nenhum vídeo fornecido.
+- 400 Bad Request: Linguagem de origem não suportada.
+- 400 Bad Request: Linguagem de destino não suportada.
+- 400 Bad Request: Arquivo de vídeo não encontrado.
+- 500 Internal Server Error: Erro ao processar o vídeo.
+- 500 Internal Server Error: Erro inesperado.
