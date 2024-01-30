@@ -82,6 +82,21 @@ async def get_image_data_from_bytes(image: UploadFile) -> Tuple[np.ndarray, str]
     return img, etx
 
 
+async def get_media_data_from_bytes(media: Union[UploadFile, str]):
+    from pathlib import Path
+
+    if isinstance(media, str):
+        response = requests.get(media)
+        response.raise_for_status()
+        media_data = response.content
+        ext = Path(media).suffix.lower()
+    else:
+        media_data = await media.read()
+        ext = Path(media.filename).suffix.lower()
+
+    return media_data, ext
+
+
 def extract_image_information(image: np.ndarray, lang: str, confidence_threshold: float = 70.0) -> Tuple[int, np.ndarray, TextData]:
     config = '--tessdata-dir tesseract/tessdata_better --oem 3 --psm 11'
     textdata = TextData(pytesseract.image_to_data(image=image, lang=lang, config=config, output_type=pytesseract.Output.DICT))
@@ -117,12 +132,16 @@ async def avaliable_better_image_for_reader(images: List[np.ndarray], lang: str,
 
 def apply_image_processing(image: np.ndarray) -> dict[str, np.ndarray]:
 
-    # mask = get_textareas_mask(image)
-    # result_image = cv2.bitwise_and(image, image, mask=mask)
-
     images = {'image': image}
-    # images['resize'] = resize_image(images['image'], 0.5)
-    images['gray'] = color_to_gray(images['image'])
+    images['resize'] = resize_image(images['image'], 0.5)
+    images['masked'] = masked(images['image'])
+    images['resize'] = resize_image(images['masked'], 2.0)
+
+    cv2.imshow('a', images['masked'])
+    if cv2.waitKey(0) and ord('q'):
+        cv2.destroyAllWindows()
+
+    images['gray'] = color_to_gray(images['resize'])
     images['invert'] = invert_colors(images['gray'])
     images['bilateral'] = bilateral_filtrage(images['invert'])
     images['equalize'] = equalize_histogram(images['bilateral'])
@@ -309,7 +328,7 @@ async def api_extract_text_from_image(src: str = Body(...), image: Union[UploadF
         raise HTTPException(status_code=500, detail=f"Erro ao extrair texto da imagem: {str(e)}")
 
 
-@app.post("/api/translate-and-replace-text-from-image")
+@app.post("/api/translate-image-and-replace")
 async def api_translate_and_replace_text_from_image(
     src: str = Body(...),
     dest: str = Body(...),
@@ -342,15 +361,16 @@ async def api_translate_and_replace_text_from_image(
 
 
 @app.post("/api/extract-text-from-video")
-async def api_extract_text_from_video(src: str = Body(None), video: UploadFile = File(...)):
+async def api_extract_text_from_video(src: str = Body(None), video: Union[UploadFile, str] = File(...)):
     import uuid
     import os
-    import tempfile
 
     try:
-        video_path = f"temp_video_{uuid.uuid4()}.mp4"
-        with tempfile.NamedTemporaryFile(delete=False, dir=tempfile.gettempdir()) as video_file:
-            video_file.write(video.file.read())
+        video_data, video_ext = await get_media_data_from_bytes(video)
+
+        video_path = f"temp_video_{uuid.uuid4()}.{video_ext}"
+        with open(video_path, 'wb') as video_file:
+            video_file.write(video_data)
 
         clip = VideoFileClip(video_path)
         frames = (frame for frame in clip.iter_frames())

@@ -142,7 +142,7 @@ def remove_borders(image: np.ndarray) -> np.ndarray:
     return crop
 
 
-def get_textareas_mask(image: np.ndarray, min_contour_percent: float = 1.0, max_contour_percent: float = 50.0) -> np.ndarray:
+def masked(image: np.ndarray, min_contour_percent: float = 1.0, max_contour_percent: float = 50.0) -> np.ndarray:
     gray = color_to_gray(image)
     invert = invert_colors(gray)
     blur = cv2.GaussianBlur(invert, (7, 7), 0)
@@ -152,7 +152,11 @@ def get_textareas_mask(image: np.ndarray, min_contour_percent: float = 1.0, max_
     thresh = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
     hist = equalize_histogram(thresh)
 
-    contours, _ = cv2.findContours(hist, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cv2.imshow('a', gray)
+    if cv2.waitKey(0) and ord('q'):
+        cv2.destroyAllWindows()
+
+    contours, _ = cv2.findContours(gray, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     image_area = image.shape[0] * image.shape[1]
 
@@ -175,7 +179,6 @@ def get_textareas_mask(image: np.ndarray, min_contour_percent: float = 1.0, max_
 
     mask = np.zeros_like(image)
 
-    cv2.drawContours(mask, filtered_contours, -1, (255, 255, 255), thickness=cv2.FILLED)
-
     result_image = np.where(mask == 0, 0, 255)
-    return result_image.astype(np.uint8)
+    result_image.astype(np.uint8)
+    return cv2.bitwise_and(image, image, mask=mask)
