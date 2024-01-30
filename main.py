@@ -445,4 +445,4 @@ async def translate_and_replace_from_media(
 if __name__ == '__main__':
     import uvicorn
 
-    uvicorn.run(app)
+    uvicorn.run(app, port=80)
