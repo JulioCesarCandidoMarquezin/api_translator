@@ -3,6 +3,9 @@ import numpy as np
 from pytesseract import pytesseract
 
 pytesseract.tesseract_cmd = 'tesseract/tesseract.exe'
+cv2.setUseOptimized(True)
+cv2.setNumThreads(8)
+cv2.ocl.setUseOpenCL(True)
 
 
 def resize_image(image: np.ndarray, scale: float) -> np.ndarray:
@@ -21,7 +24,7 @@ def blur_image(image: np.ndarray) -> np.ndarray:
 
 
 def adaptive_threshold(image: np.ndarray) -> np.ndarray:
-    return cv2.adaptiveThreshold(image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+    return cv2.adaptiveThreshold(image, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 11, 2)
 
 
 def equalize_histogram(image: np.ndarray) -> np.ndarray:
@@ -51,20 +54,17 @@ def enhance_contrast(image: np.ndarray) -> np.ndarray:
     return clahe.apply(image)
 
 
-def morphological_transform(image: np.ndarray) -> np.ndarray:
-    kernel = np.ones((3, 3), np.uint8)
+def morphological_transform(image: np.ndarray, kernel: np.ndarray) -> np.ndarray:
     eroded_img = cv2.erode(image, kernel, iterations=1)
     dilated_img = cv2.dilate(image, kernel, iterations=1)
     return dilated_img
 
 
-def morphological_oppening(image: np.ndarray) -> np.ndarray:
-    kernel = np.ones((3, 3), np.uint8)
+def morphological_oppening(image: np.ndarray, kernel: np.ndarray) -> np.ndarray:
     return cv2.morphologyEx(image, cv2.MORPH_OPEN, kernel, iterations=2)
 
 
-def morphological_closing(image: np.ndarray) -> np.ndarray:
-    kernel = np.ones((3, 3), np.uint8)
+def morphological_closing(image: np.ndarray, kernel: np.ndarray) -> np.ndarray:
     return cv2.morphologyEx(image, cv2.MORPH_CLOSE, kernel, iterations=2)
 
 
@@ -72,30 +72,26 @@ def adjust_contrast(image: np.ndarray) -> np.ndarray:
     return cv2.convertScaleAbs(image, alpha=1.5, beta=50)
 
 
-def noise_removal(image: np.ndarray) -> np.ndarray:
-    kernel = np.ones((1, 1), np.uint8)
+def noise_removal(image: np.ndarray, kernel: np.ndarray) -> np.ndarray:
     image = cv2.dilate(image, kernel, iterations=1)
-    kernel = np.ones((1, 1), np.uint8)
     image = cv2.erode(image, kernel, iterations=1)
     image = cv2.morphologyEx(image, cv2.MORPH_CLOSE, kernel)
     image = cv2.medianBlur(image, 3)
-    return (image)
+    return image
 
 
-def thin_font(image: np.ndarray) -> np.ndarray:
+def thin_font(image: np.ndarray, kernel: np.ndarray) -> np.ndarray:
     image = cv2.bitwise_not(image)
-    kernel = np.ones((2, 2), np.uint8)
     image = cv2.erode(image, kernel, iterations=1)
     image = cv2.bitwise_not(image)
-    return (image)
+    return image
 
 
-def thick_font(image: np.ndarray) -> np.ndarray:
+def thick_font(image: np.ndarray, kernel: np.ndarray) -> np.ndarray:
     image = cv2.bitwise_not(image)
-    kernel = np.ones((2, 2), np.uint8)
     image = cv2.dilate(image, kernel, iterations=1)
     image = cv2.bitwise_not(image)
-    return (image)
+    return image
 
 
 def getSkewAngle(image: np.ndarray) -> float:
@@ -142,21 +138,18 @@ def remove_borders(image: np.ndarray) -> np.ndarray:
     return crop
 
 
-def masked(image: np.ndarray, min_contour_percent: float = 1.0, max_contour_percent: float = 50.0) -> np.ndarray:
+def masked(image: np.ndarray, min_contour_percent: float = 10.0, max_contour_percent: float = 95.0) -> np.ndarray:
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     gray = color_to_gray(image)
-    invert = invert_colors(gray)
-    blur = cv2.GaussianBlur(invert, (7, 7), 0)
-    thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
-    open = canny_edge_detection(thresh)
+    blur = cv2.GaussianBlur(gray, (7, 7), 0)
+    thresh = adaptive_threshold(blur)
+    dilate = thick_font(thresh, kernel)
+    erode = thin_font(dilate, kernel)
+    open = morphological_transform(erode, kernel)
+    hist = equalize_histogram(open)
+    invert = invert_colors(open)
 
-    thresh = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
-    hist = equalize_histogram(thresh)
-
-    cv2.imshow('a', gray)
-    if cv2.waitKey(0) and ord('q'):
-        cv2.destroyAllWindows()
-
-    contours, _ = cv2.findContours(gray, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours, _ = cv2.findContours(invert, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     image_area = image.shape[0] * image.shape[1]
 
@@ -167,18 +160,10 @@ def masked(image: np.ndarray, min_contour_percent: float = 1.0, max_contour_perc
 
     filtered_contours = [cnt for cnt in contours if min_contour_area < cv2.contourArea(cnt) < max_contour_area]
 
-    for contour in filtered_contours:
-        area_contour = cv2.contourArea(contour)
-        percent_area = (area_contour / image_area) * 100
-
-        x, y, w, h = cv2.boundingRect(contour)
-        roi = hist[y:y + h, x:x + w]
-        cv2.imshow('roi', roi)
-        if cv2.waitKey(0) and ord('q'):
-            cv2.destroyAllWindows()
-
     mask = np.zeros_like(image)
 
-    result_image = np.where(mask == 0, 0, 255)
-    result_image.astype(np.uint8)
-    return cv2.bitwise_and(image, image, mask=mask)
+    cv2.drawContours(mask, filtered_contours, -1, (255, 255, 255), thickness=cv2.FILLED)
+
+    result_image = cv2.bitwise_and(image, image, mask=mask)
+
+    return result_image

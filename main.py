@@ -1,6 +1,5 @@
 from textwrap import wrap
-
-from time import time
+from typing import Literal
 import asyncio
 
 import pytesseract
@@ -38,11 +37,12 @@ app.add_middleware(
 language_mapping: dict[str, str] = {}
 
 
-async def read_language_mapping(filename: str = "language_mapping.txt") -> None:
+def read_language_mapping(filename: str = "language_mapping.txt") -> None:
     with open(filename, "r") as file:
         for line in file:
             key, value = line.strip().split(":")
             language_mapping[key] = value
+
 
 read_language_mapping()
 
@@ -83,7 +83,7 @@ async def get_image_data_from_bytes(image: UploadFile) -> Tuple[np.ndarray, str]
     return img, etx
 
 
-async def get_media_data_from_bytes(media: Union[UploadFile, str]):
+async def get_media_data_from_bytes(media: Union[UploadFile, str]) -> Tuple[bytes, str]:
     from pathlib import Path
 
     if isinstance(media, str):
@@ -101,14 +101,13 @@ async def get_media_data_from_bytes(media: Union[UploadFile, str]):
 def extract_image_information(image: np.ndarray, lang: str, confidence_threshold: float = 70.0) -> Tuple[int, np.ndarray, TextData]:
     config = '--tessdata-dir tesseract/tessdata_better --oem 3 --psm 11'
     textdata = TextData(pytesseract.image_to_data(image=image, lang=lang, config=config, output_type=pytesseract.Output.DICT))
-    filtered_textdata = textdata.filter_textdata(confidence_threshold)
-    num_confiable_texts = len(filtered_textdata.conf)
-    return num_confiable_texts, image, filtered_textdata
+    textdata = textdata.filter_textdata(confidence_threshold)
+    num_confiable_texts = len(textdata.conf)
+    return num_confiable_texts, image, textdata
 
 
-async def avaliable_better_image_for_reader(images: List[np.ndarray], lang: str, confidence_threshold: float = 70.0) -> Tuple[np.ndarray, dict]:
+async def avaliable_better_image_for_reader(images: List[np.ndarray], lang: str, confidence_threshold: float = 70.0) -> Tuple[np.ndarray, TextData]:
     best_image_data: dict = {'num_confiable_texts': 0, 'image': None, 'textdata': None}
-    i = time()
 
     async def process_images_async(args: Tuple[np.ndarray, str, float]) -> Tuple[int, np.ndarray, TextData]:
         return extract_image_information(*args)
@@ -125,34 +124,29 @@ async def avaliable_better_image_for_reader(images: List[np.ndarray], lang: str,
                 best_image_data['image'] = image
                 best_image_data['textdata'] = textdata
 
-    f = time()
-    print(f'tempo {round(f - i, 2)} seconds')
     best_image_data['textdata'] = TextData.merge_textdata(filtred_textdata_list, 5)
     return best_image_data['image'], best_image_data['textdata']
 
 
-def apply_image_processing(image: np.ndarray) -> dict[str, np.ndarray]:
+def apply_image_processing(image: np.ndarray) -> Dict[str, np.ndarray]:
 
-    images = {'image': image}
-    images['resize'] = resize_image(images['image'], 0.5)
-    images['masked'] = masked(images['image'])
-    images['resize'] = resize_image(images['masked'], 2.0)
+    images = {}
+    images['masked'] = masked(image)
+    # images = {'image': image}
+    # images['resize'] = resize_image(images['image'], 0.5)
+    # images['resize'] = resize_image(images['masked'], 2.0)
 
-    cv2.imshow('a', images['masked'])
-    if cv2.waitKey(0) and ord('q'):
-        cv2.destroyAllWindows()
-
-    images['gray'] = color_to_gray(images['resize'])
-    images['invert'] = invert_colors(images['gray'])
-    images['bilateral'] = bilateral_filtrage(images['invert'])
-    images['equalize'] = equalize_histogram(images['bilateral'])
+    images['gray'] = color_to_gray(images['masked'])
+    # images['invert'] = invert_colors(images['gray'])
+    # images['bilateral'] = bilateral_filtrage(images['invert'])
+    # images['equalize'] = equalize_histogram(images['bilateral'])
     # images['morph_transform'] = morphological_transform(images['equalize'])
     # images['contrast'] = enhance_contrast(images['morph_transform'])
     # images['blur'] = blur_image(images['contrast'])
     # images['threshold'] = adaptive_threshold(images['blur'])
     # images['morph_opening'] = morphological_oppening(images['threshold'])
     # images['morph_closing'] = morphological_closing(images['threshold'])
-    # # images['canny'] = canny_edge_detection(images['threshold'])
+    # images['canny'] = canny_edge_detection(images['threshold'])
     # images['thick_font'] = thick_font(images['threshold'])
     # images['thin_font'] = thin_font(images['threshold'])
     # images['noise_removal'] = noise_removal(images['threshold'])
@@ -162,53 +156,76 @@ def apply_image_processing(image: np.ndarray) -> dict[str, np.ndarray]:
     return images
 
 
-async def process_image(image: np.ndarray, lang: str):
+async def process_image(image: np.ndarray, lang: str) -> Tuple[np.ndarray, TextData]:
     images = apply_image_processing(image).values()
     better, textdata = await avaliable_better_image_for_reader(images, lang)
     return better, textdata
 
 
-async def extract_text_from_image(src: str, content: np.ndarray = None) -> TextData:
+async def extract_text_from_image(src: str, image: np.ndarray = None) -> TextData:
     ocr_src = get_tesseract_language(src)
-    _, textdata = await process_image(image=content, lang=await ocr_src)
-    return TextData(textdata)
+    _, textdata = await process_image(image=image, lang=await ocr_src)
+    return textdata
 
 
-async def draw_rectangles(draw, lines):
-    for line in lines:
-        line_x, line_y, line_w, line_h, original_line_text = line['x'], line['y'], line['w'], line['h'], line['text']
+def draw_rectangle(draw: ImageDraw.ImageDraw, line: Line) -> None:
+    x1, y1, x2, y2 = line.get_coordinates()
+    line_text = line.text
 
-        contains_special_character = unidecode(original_line_text) != original_line_text
-        margin = 2
+    contains_special_character = unidecode(line_text) != line_text
+    margin = 2
 
-        if contains_special_character:
-            additional_size = int(line_h / 3)
+    if contains_special_character:
+        additional_size = int((y2 - y1) / 3)
+    else:
+        additional_size = 0
+
+    x1 = x1 - margin
+    y1 = y1 - additional_size - margin
+    x2 = x2 + margin * 2
+    y2 = y2 + additional_size + margin * 2
+
+    draw.rectangle((x1, y1, x2, y2), fill='white')
+
+
+def draw_text(draw: ImageDraw.ImageDraw, line: Line, align: Literal['left', 'center', 'right'] = 'center') -> None:
+    x1, y1, x2, y2 = line.get_coordinates()
+
+    try:
+        text = line.text
+
+        line_h = int(y2 - y1)
+        font_size = int(line_h * 1.25)
+        font = ImageFont.truetype("arial.ttf", font_size, encoding='unic')
+
+        text_bbox = draw.textbbox((x1, y1), text, font=font)
+
+        text_w = int(text_bbox[2] - text_bbox[0])
+
+        if align == 'left':
+            x1 = x1
+        elif align == 'center':
+            x1 = x1 + (x2 - x1 - text_w) / 2
+        elif align == 'right':
+            x1 = x2 - text_w
         else:
-            additional_size = 0
+            x1 = x1 + (x2 - x1 - text_w) / 2
 
-        draw.rectangle((line_x - margin, line_y - additional_size - margin, line_w + margin * 2, line_h + line_y + additional_size + margin * 2), fill='white')
+        y_translation = y1 + (y2 - y1 - line_h * len(text.split('\n'))) / 2
 
+        draw.text((x1, y_translation), text, fill=0, font=font, align=align)
 
-async def translate_and_draw(draw, lines, translated_lines):
-    for i, line in enumerate(lines):
-        x, y, h = line['x'], line['y'], line['h']
-
-        if i < len(translated_lines):
-            try:
-                font = ImageFont.truetype("impact.ttf", int(h * 1.25), encoding='unic')
-                translated_line = translated_lines[i]
-                draw.text((x, y), translated_line, fill=0, font=font)
-            except Exception as e:
-                raise e
+    except Exception as e:
+        raise Exception(f"Erro ao desenhar texto: {e}")
 
 
-async def translate_and_replace_text_from_image(src: str, dest: str, content: np.ndarray = None) -> np.ndarray:
+async def translate_and_replace_text_from_image(src: str, dest: str, image: np.ndarray = None, align: Literal['left', 'center', 'right'] = 'center') -> np.ndarray:
     if src == 'auto':
         src = 'en'
 
-    textdata = extract_text_from_image(src, content)
+    textdata = extract_text_from_image(src, image)
 
-    img_replaced = content.copy()
+    img_replaced = image.copy()
     img_replaced = color_to_gray(img_replaced)
 
     img_pil = Image.fromarray(img_replaced)
@@ -216,23 +233,40 @@ async def translate_and_replace_text_from_image(src: str, dest: str, content: np
 
     paragraphs = Paragraph.get_paragraphs_from_textdata(await textdata)
 
+    translation_tasks = []
+
     for i, paragraph in enumerate(paragraphs):
         if isinstance(paragraph, list):
             continue
 
-        text = paragraph.text
+        translation_tasks.append(translate_text(paragraph.text, src, dest))
 
-        if text.strip() == '':
+    translated_paragraphs = await asyncio.gather(*translation_tasks)
+
+    for i, paragraph in enumerate(paragraphs):
+        if isinstance(paragraph, list):
             continue
 
+        paragraph.text = translated_paragraphs[i]
+        text = paragraph.text
+
         lines = paragraph.lines
-        avg_length = sum(len(line.text) for line in lines) / len(lines) if lines else 0
+        avg_length = int(len(text) / len(paragraph.lines))
 
-        translated_text = await translate_text(text, src=src, dest=dest)
-        translated_lines = wrap(text=translated_text, width=avg_length)
+        translated_lines = wrap(text=text, width=avg_length)
 
-        await draw_rectangles(draw, lines)
-        await translate_and_draw(draw, lines, translated_lines)
+        lines_h = int((paragraph.y2 - paragraph.y1) / len(translated_lines))
+        lines_h_margin = int(lines_h * 0.15)
+
+        translated_lines = [
+            Line(paragraph.x1, paragraph.y1 + i * lines_h, paragraph.x2, paragraph.y1 + (i + 1) * lines_h - lines_h_margin,
+                 translated_line) for i, translated_line in enumerate(translated_lines)]
+
+        for line in lines:
+            draw_rectangle(draw, line)
+
+        for translated_line in translated_lines:
+            draw_text(draw, translated_line, align)
 
     imgReplaced = cv.cvtColor(np.array(img_pil), cv.COLOR_GRAY2BGR)
 
@@ -317,8 +351,8 @@ async def api_extract_text_from_image(src: str = Body(...), image: Union[UploadF
             response.raise_for_status()
             image = response.content
 
-        img = await convert_bytes_in_image(image=image)
-        textdata = await extract_text_from_image(src=src, content=img)
+        image = await convert_bytes_in_image(image=image)
+        textdata = await extract_text_from_image(src=src, image=image)
 
         paragraphs = Paragraph.get_paragraphs_from_textdata(textdata)
 
@@ -333,6 +367,7 @@ async def api_extract_text_from_image(src: str = Body(...), image: Union[UploadF
 async def api_translate_and_replace_text_from_image(
     src: str = Body(...),
     dest: str = Body(...),
+    align: str = Body(...),
     image: Union[UploadFile, str] = File(...)
 ):
     from io import BytesIO
@@ -345,12 +380,9 @@ async def api_translate_and_replace_text_from_image(
         if dest not in LANGUAGES:
             raise HTTPException(status_code=400, detail=f"Linguagem de destino não suportada: {dest}")
 
-        img, etx = await get_image_data_from_bytes(image=image)
+        image, etx = await get_image_data_from_bytes(image=image)
 
-        images = apply_image_processing(img).values()
-        better, textdata = await avaliable_better_image_for_reader(images, await get_tesseract_language(src))
-
-        img_replaced = await translate_and_replace_text_from_image(src=src, dest=dest, content=better)
+        img_replaced = await translate_and_replace_text_from_image(src=src, dest=dest, image=image, align=align)
         img_converted = await convert_image_in_bytes(etx=etx, img=img_replaced)
 
         return StreamingResponse(BytesIO(img_converted), media_type="image/jpeg")
@@ -399,7 +431,10 @@ async def api_extract_text_from_media(src: str = Body(None), media: Union[Upload
 
 @app.post("/api/translate-and-replace-from-media")
 async def translate_and_replace_from_media(
-    src: str = Body(None), dest: str = Body(None), media: Union[UploadFile, str] = File(...)
+    src: str = Body(None),
+    dest: str = Body(None),
+    align: str = Body(...),
+    media: Union[UploadFile, str] = File(...)
 ):
     import uuid
     import os
@@ -421,9 +456,7 @@ async def translate_and_replace_from_media(
         clip = VideoFileClip(media_path)
 
         async def process_frame(frame):
-            images = apply_image_processing(frame).values()
-            better, _ = await avaliable_better_image_for_reader(images, await get_tesseract_language(src))
-            replaced_frame = await translate_and_replace_text_from_image(src=src, dest=dest, content=better)
+            replaced_frame = await translate_and_replace_text_from_image(src=src, dest=dest, image=frame, align=align)
             return replaced_frame
 
         replaced_frames: List[np.ndarray] = await asyncio.gather(*(process_frame(frame) for frame in clip.iter_frames()))

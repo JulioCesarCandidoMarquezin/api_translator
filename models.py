@@ -1,84 +1,131 @@
-from typing import List, Optional, Union, Tuple
+from typing import List, Optional, Union, Tuple, Dict
 import numpy as np
 
 
 class Word:
-    def __init__(self, x: int, y: int, w: int, h: int, text: str):
-        self.x: int = x
-        self.y: int = y
-        self.w: int = w
-        self.h: int = h
+    id_counter: int = 0
+
+    def __init__(self, x1: int = 0, y1: int = 0, x2: int = 0, y2: int = 0, text: str = ""):
+        Word.id_counter += 1
+        self.id = Word.id_counter
+        self.x1: int = x1
+        self.y1: int = y1
+        self.x2: int = x2
+        self.y2: int = y2
         self.text: str = text
 
     def get_coordinates(self) -> Tuple[int, int, int, int]:
-        return self.x, self.y, self.w, self.h
+        return self.x1, self.y1, self.x2, self.y2
+
+    def is_object_around(self, other: 'Object', h_margin_percentage: float) -> 'Object':
+        x1, y1, x2, y2 = self.get_coordinates()
+        other_x1, other_y1, other_x2, other_y2 = other.get_coordinates()
+
+        w_margin = int((x2 - x1) / (len(self.text) - 1 if len(self.text) > 1 else 1))
+        h_margin = int((y2 - y1) * h_margin_percentage)
+
+        around_x = (x1 - w_margin <= other_x2 <= x2 + w_margin) or (other_x1 - w_margin <= x2 <= other_x2 + w_margin)
+        around_y = (y1 - h_margin <= other_y2 <= y2 + h_margin) or (other_y1 - h_margin <= y2 <= other_y2 + h_margin)
+
+        if around_x and around_y:
+            return other
+        return None
 
     def __str__(self) -> str:
-        return f"Word(x={self.x}, y={self.y}, w={self.w}, h={self.h}, text='{self.text}')"
+        return f"Word(id={self.id}, x1={self.x1}, y1={self.y1}, x2={self.x2}, y2={self.y2}, text='{self.text}')"
 
 
 class Line:
-    def __init__(self, x: int, y: int, w: int, h: int, text: str, words: List[Word]):
-        self.x: int = x
-        self.y: int = y
-        self.w: int = w
-        self.h: int = h
+    id_counter: int = 0
+
+    def __init__(self, x1: int = 0, y1: int = 0, x2: int = 0, y2: int = 0, text: str = "", words: List[Word] = None):
+        Line.id_counter += 1
+        self.id: int = Line.id_counter
+        self.x1: int = x1
+        self.y1: int = y1
+        self.x2: int = x2
+        self.y2: int = y2
         self.text: str = text
         self.words: List[Word] = words
 
     def add_word(self, word: Word) -> None:
+        word_x1, word_y1, word_x2, word_y2 = word.x1, word.y1, word.x2, word.y2
+
+        self.x1 = min(self.x1, word_x1)
+        self.y1 = min(self.y1, word_y1)
+        self.x2 = max(self.x2, word_x2)
+        self.y2 = max(self.y2, word_y2)
+
+        self.text += " " + word.text
+
         self.words.append(word)
 
     def get_coordinates(self) -> Tuple[int, int, int, int]:
-        return self.x, self.y, self.w, self.h
+        return self.x1, self.y1, self.x2, self.y2
+
+    def organize_words_order(self):
+        self.words.sort(key=lambda word: (word.x1, word.y1))
+        self.text = ' '.join(word.text for word in self.words)
 
     def update_attributes_from_words(self) -> None:
         if self.words:
             coordinates = np.array([word.get_coordinates() for word in self.words])
             self.text = ' '.join(word.text for word in self.words)
-            self.x, self.y, self.w, self.h = np.min(coordinates[:, 0]), np.min(coordinates[:, 1]), np.max(coordinates[:, 2]), np.max(coordinates[:, 3])
+            self.x1, self.y1, self.x2, self.y2 = np.min(coordinates[:, 0]), np.min(coordinates[:, 1]), np.max(coordinates[:, 2]), np.max(coordinates[:, 3])
 
     def __str__(self) -> str:
-        return f"Line(words={self.words})"
+        return f"""
+            Line(
+                id='{self.id}',
+                text='{self.text}',
+                x={self.x1},
+                y={self.y1},
+                width={self.x2},
+                height={self.y2},
+                words=[
+                    {' '.join(str(word) for word in self.words)}
+                ]
+            )
+        """
 
 
 class Paragraph:
-    def __init__(self, x: int, y: int, w: int, h: int, text: str, lines: List[Line]):
-        self.x: int = x
-        self.y: int = y
-        self.w: int = w
-        self.h: int = h
+    id_counter: int = 0
+
+    def __init__(self, x1: int = 0, y1: int = 0, x2: int = 0, y2: int = 0, text: str = "", lines: List[Line] = None):
+        Paragraph.id_counter += 1
+        self.id: int = Paragraph.id_counter
+        self.x1: int = x1
+        self.y1: int = y1
+        self.x2: int = x2
+        self.y2: int = y2
         self.text: str = text
         self.lines: List[Line] = lines
 
     def add_line(self, line: Line) -> None:
+        line_x1, line_y1, line_x2, line_y2 = line.get_coordinates()
+
+        self.x1 = min(self.x1, line_x1)
+        self.y1 = min(self.y1, line_y1)
+        self.x2 = max(self.x2, line_x2)
+        self.y2 = max(self.y2, line_y2)
+
+        self.text += "\n" + line.text
+
         self.lines.append(line)
 
     def get_coordinates(self) -> Tuple[int, int, int, int]:
-        return self.x, self.y, self.w, self.h
+        return self.x1, self.y1, self.x2, self.y2
 
     def update_attributes_from_lines(self) -> None:
         if self.lines:
-            coordinates = np.array((line.get_coordinates() for line in self.lines), dtype=int)
+            coordinates = np.array([line.get_coordinates() for line in self.lines], dtype=int)
             self.text = '\n'.join(line.text for line in self.lines)
-            self.x, self.y, self.w, self.h = np.min(coordinates[:, 0]), np.min(coordinates[:, 1]), np.max(coordinates[:, 2]), np.max(coordinates[:, 3])
+            self.x1, self.y1, self.x2, self.y2 = np.min(coordinates[:, 0]), np.min(coordinates[:, 1]), np.max(coordinates[:, 2]), np.max(coordinates[:, 3])
 
-    def get_compatible_position_paragraph(self, paragraphs: List['Paragraph'], width_margin_factor: float = 0.2, height_margin_factor: float = 0.2) -> Optional['Paragraph']:
-        x, y, w, h = self.get_coordinates()
-
-        for paragraph in paragraphs:
-            para_x, para_y, para_w, para_h = paragraph.get_coordinates()
-
-            width_margin = para_w * width_margin_factor
-            height_margin = para_h * height_margin_factor
-
-            x_between_margin: bool = (para_x - width_margin <= x + w <= para_x + para_w + width_margin)
-            y_between_margin: bool = (para_y - height_margin <= y + h <= para_y + para_h + height_margin)
-
-            if x_between_margin and y_between_margin:
-                return paragraph
-
-        return None
+    def organize_lines_order(self):
+        self.lines.sort(key=lambda line: (line.y1, line.x1))
+        self.text = ' '.join(word.text for word in self.lines)
 
     @staticmethod
     def get_paragraphs_from_textdata(textdata: 'TextData') -> List['Paragraph']:
@@ -86,38 +133,68 @@ class Paragraph:
         current_paragraph: Optional['Paragraph'] = None
         current_line: Optional['Line'] = None
 
-        for i in range(len(textdata.conf)):
-            x, y, w, h, text = textdata.left[i], textdata.top[i], textdata.width[i], textdata.height[i], textdata.text[i]
+        textdata.sort_entries(['top', 'left'])
 
-            word = Word(x, y, w, h, text.strip())
-            compatible_paragraph = current_paragraph.get_compatible_position_paragraph(paragraphs) if current_paragraph else None
+        for x, y, w, h, text in zip(textdata.left, textdata.top, textdata.width, textdata.height, textdata.text):
 
-            if compatible_paragraph:
+            word = Word(x, y, x + w, y + h, text.strip())
+
+            if current_paragraph is None:
+                current_line = Line(x, y, x + w, y + h, text, [word])
+                current_paragraph = Paragraph(x, y, x + w, y + h, text, [current_line])
                 paragraphs.append(current_paragraph)
-                current_line = Line(x, y, w, h, text, [word])
-                current_paragraph = compatible_paragraph
-                current_paragraph.add_line(current_line)
-
-            elif (y - current_line.words[-1].y > current_line.words[-1].h) or (x - current_line.words[-1].x > current_line.words[-1].w * 2):
-                current_paragraph.add_line(current_line)
-                current_line = Line(x, y, w, h, text, [word])
             else:
-                current_line.add_word(word)
+                compatible_paragraph = next((paragraph for paragraph in paragraphs if word.is_object_around(paragraph, 0.5)), None)
 
-        if current_line.words:
-            current_paragraph.add_line(current_line)
+                if compatible_paragraph:
+                    current_paragraph = compatible_paragraph
+                    compatible_line = next((line for line in current_paragraph.lines if word.is_object_around(line, 0.25)), None)
 
-        if current_paragraph:
-            paragraphs.append(current_paragraph)
+                    if compatible_line:
+                        current_line = compatible_line
+                        current_line.add_word(word)
+                    else:
+                        current_line = Line(x, y, x + w, y + h, text, [word])
+                        current_paragraph.add_line(current_line)
+                else:
+                    current_line = Line(x, y, x + w, y + h, text, [word])
+                    current_paragraph = Paragraph(x, y, x + w, y + h, text, [current_line])
+                    paragraphs.append(current_paragraph)
+
+                for paragraph in paragraphs:
+                    for line in paragraph.lines:
+                        line.update_attributes_from_words()
+                    paragraph.update_attributes_from_lines()
+
+        for paragraph in paragraphs:
+            for line in paragraph.lines:
+                line.organize_words_order()
+            paragraph.organize_lines_order()
 
         return paragraphs
 
     def __str__(self) -> str:
-        return f"Paragraph(text='{self.text}', x={self.x}, y={self.y}, width={self.w}, height={self.h}, lines={self.lines})"
+        lines_str = '\n'.join(str(line) for line in self.lines)
+        return f"""
+            Paragraph(
+                id='{self.id}',
+                text='{self.text}',
+                x={self.x},
+                y={self.y},
+                width={self.w},
+                height={self.h},
+                lines=[
+                    {lines_str}
+                ]
+            )
+        """
 
 
 class TextData:
     def __init__(self, textdata: Optional[dict] = None):
+        if textdata is None:
+            textdata = {}
+
         self.level: List[Union[int, None]] = textdata.get('level', [])
         self.page_num: List[Union[int, None]] = textdata.get('page_num', [])
         self.block_num: List[Union[int, None]] = textdata.get('block_num', [])
@@ -145,8 +222,43 @@ class TextData:
         self.conf.append(conf)
         self.text.append(text)
 
-    def get_entries(self) -> List[Tuple[Union[int, None], ...]]:
-        return list(zip(self.level, self.page_num, self.block_num, self.par_num, self.line_num, self.word_num, self.left, self.top, self.width, self.height, self.conf, self.text))
+    def get_entries(self) -> List[Dict[str, Union[int, float, str, None]]]:
+        return [
+            {
+                'level': level,
+                'page_num': page_num,
+                'block_num': block_num,
+                'par_num': par_num,
+                'line_num': line_num,
+                'word_num': word_num,
+                'left': left,
+                'top': top,
+                'width': width,
+                'height': height,
+                'conf': conf,
+                'text': text
+            }
+            for level, page_num, block_num, par_num, line_num, word_num, left, top, width, height, conf, text in zip(
+                self.level, self.page_num, self.block_num, self.par_num, self.line_num, self.word_num,
+                self.left, self.top, self.width, self.height, self.conf, self.text
+            )
+        ]
+
+    def sort_entries(self, sorting_keys: list) -> None:
+        sorted_indices = sorted(range(len(self.top)), key=lambda k: tuple(getattr(self, key)[k] for key in sorting_keys))
+
+        self.level = [self.level[i] for i in sorted_indices]
+        self.page_num = [self.page_num[i] for i in sorted_indices]
+        self.block_num = [self.block_num[i] for i in sorted_indices]
+        self.par_num = [self.par_num[i] for i in sorted_indices]
+        self.line_num = [self.line_num[i] for i in sorted_indices]
+        self.word_num = [self.word_num[i] for i in sorted_indices]
+        self.left = [self.left[i] for i in sorted_indices]
+        self.top = [self.top[i] for i in sorted_indices]
+        self.width = [self.width[i] for i in sorted_indices]
+        self.height = [self.height[i] for i in sorted_indices]
+        self.conf = [self.conf[i] for i in sorted_indices]
+        self.text = [self.text[i] for i in sorted_indices]
 
     def filter_textdata(self, confidence_threshold: float) -> 'TextData':
         num_entries: int = len(self.conf)
@@ -187,7 +299,7 @@ class TextData:
                 text: str = str(textdata.text[i])
                 position: Tuple[int, int] = (int(textdata.left[i]), int(textdata.top[i]))
 
-                if text not in word_positions or not any(abs(position[0] - pos[0]) < position_margin and abs(position[1] - pos[1]) < position_margin for pos in word_positions[text]):
+                if text not in word_positions or not any(abs(position[0] - pos[0]) < position_margin * 2 and abs(position[1] - pos[1]) < position_margin * 2 for pos in word_positions[text]):
                     word_positions.setdefault(text, []).append(position)
                     merged_textdata.level.append(int(textdata.level[i]))
                     merged_textdata.page_num.append(int(textdata.page_num[i]))
