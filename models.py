@@ -3,11 +3,7 @@ import numpy as np
 
 
 class Word:
-    id_counter: int = 0
-
     def __init__(self, x1: int = 0, y1: int = 0, x2: int = 0, y2: int = 0, text: str = ""):
-        Word.id_counter += 1
-        self.id = Word.id_counter
         self.x1: int = x1
         self.y1: int = y1
         self.x2: int = x2
@@ -31,16 +27,21 @@ class Word:
             return other
         return None
 
+    def to_dict(self):
+        return {
+            'text': self.text,
+            'x1': self.x1,
+            'y1': self.y1,
+            'x2': self.x2,
+            'y2': self.y2,
+        }
+
     def __str__(self) -> str:
-        return f"Word(id={self.id}, x1={self.x1}, y1={self.y1}, x2={self.x2}, y2={self.y2}, text='{self.text}')"
+        return f"Word(text='{self.text}, x1={self.x1}, y1={self.y1}, x2={self.x2}, y2={self.y2}')"
 
 
 class Line:
-    id_counter: int = 0
-
     def __init__(self, x1: int = 0, y1: int = 0, x2: int = 0, y2: int = 0, text: str = "", words: List[Word] = None):
-        Line.id_counter += 1
-        self.id: int = Line.id_counter
         self.x1: int = x1
         self.y1: int = y1
         self.x2: int = x2
@@ -55,9 +56,7 @@ class Line:
         self.y1 = min(self.y1, word_y1)
         self.x2 = max(self.x2, word_x2)
         self.y2 = max(self.y2, word_y2)
-
         self.text += " " + word.text
-
         self.words.append(word)
 
     def get_coordinates(self) -> Tuple[int, int, int, int]:
@@ -71,17 +70,26 @@ class Line:
         if self.words:
             coordinates = np.array([word.get_coordinates() for word in self.words])
             self.text = ' '.join(word.text for word in self.words)
-            self.x1, self.y1, self.x2, self.y2 = np.min(coordinates[:, 0]), np.min(coordinates[:, 1]), np.max(coordinates[:, 2]), np.max(coordinates[:, 3])
+            self.x1, self.y1, self.x2, self.y2 = int(np.min(coordinates[:, 0])), int(np.min(coordinates[:, 1])), int(np.max(coordinates[:, 2])), int(np.max(coordinates[:, 3]))
+
+    def to_dict(self):
+        return {
+            'text': self.text,
+            'x1': self.x1,
+            'y1': self.y1,
+            'x2': self.x2,
+            'y2': self.y2,
+            'words': [word.to_dict() for word in self.words]
+        }
 
     def __str__(self) -> str:
         return f"""
             Line(
-                id='{self.id}',
                 text='{self.text}',
-                x={self.x1},
-                y={self.y1},
-                width={self.x2},
-                height={self.y2},
+                x1={self.x1},
+                y1={self.y1},
+                x2={self.x2},
+                y2={self.y2},
                 words=[
                     {' '.join(str(word) for word in self.words)}
                 ]
@@ -90,11 +98,7 @@ class Line:
 
 
 class Paragraph:
-    id_counter: int = 0
-
     def __init__(self, x1: int = 0, y1: int = 0, x2: int = 0, y2: int = 0, text: str = "", lines: List[Line] = None):
-        Paragraph.id_counter += 1
-        self.id: int = Paragraph.id_counter
         self.x1: int = x1
         self.y1: int = y1
         self.x2: int = x2
@@ -109,9 +113,7 @@ class Paragraph:
         self.y1 = min(self.y1, line_y1)
         self.x2 = max(self.x2, line_x2)
         self.y2 = max(self.y2, line_y2)
-
         self.text += "\n" + line.text
-
         self.lines.append(line)
 
     def get_coordinates(self) -> Tuple[int, int, int, int]:
@@ -121,7 +123,7 @@ class Paragraph:
         if self.lines:
             coordinates = np.array([line.get_coordinates() for line in self.lines], dtype=int)
             self.text = '\n'.join(line.text for line in self.lines)
-            self.x1, self.y1, self.x2, self.y2 = np.min(coordinates[:, 0]), np.min(coordinates[:, 1]), np.max(coordinates[:, 2]), np.max(coordinates[:, 3])
+            self.x1, self.y1, self.x2, self.y2 = int(np.min(coordinates[:, 0])), int(np.min(coordinates[:, 1])), int(np.max(coordinates[:, 2])), int(np.max(coordinates[:, 3]))
 
     def organize_lines_order(self):
         self.lines.sort(key=lambda line: (line.y1, line.x1))
@@ -173,16 +175,25 @@ class Paragraph:
 
         return paragraphs
 
+    def to_dict(self):
+        return {
+            'text': self.text,
+            'x1': self.x1,
+            'y1': self.y1,
+            'x2': self.x2,
+            'y2': self.y2,
+            'lines': [line.to_dict() for line in self.lines]
+        }
+
     def __str__(self) -> str:
         lines_str = '\n'.join(str(line) for line in self.lines)
         return f"""
             Paragraph(
-                id='{self.id}',
                 text='{self.text}',
-                x={self.x},
-                y={self.y},
-                width={self.w},
-                height={self.h},
+                x1={self.x1},
+                y1={self.y1},
+                x2={self.x2},
+                y2={self.y2},
                 lines=[
                     {lines_str}
                 ]
